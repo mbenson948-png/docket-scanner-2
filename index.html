@@ -293,6 +293,36 @@
             min-width: 100px;
         }
 
+        .confidence-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+
+        .confidence-high {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .confidence-medium {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .confidence-low {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .ocr-strategy {
+            font-size: 10px;
+            color: #888;
+            margin-top: 5px;
+        }
+
         .export-section {
             margin-top: 20px;
             display: none;
@@ -324,12 +354,13 @@
 
         <div class="content">
             <div class="instructions">
-                <h4>Batch Processing:</h4>
+                <h4>Tips for Best Results:</h4>
                 <ul>
-                    <li>Capture or upload as many receipts as you need</li>
-                    <li>Each receipt is processed and stored with its image</li>
-                    <li>Click "I'm Done" when finished</li>
-                    <li>Export all receipts to Excel + ZIP file with images</li>
+                    <li>Ensure good lighting - avoid shadows on the receipt</li>
+                    <li>Hold camera steady and parallel to the receipt</li>
+                    <li>Fill the frame with the receipt (but include all edges)</li>
+                    <li>Place receipt on a dark, contrasting background</li>
+                    <li>Multiple processing strategies are tried automatically</li>
                 </ul>
             </div>
 
@@ -389,6 +420,360 @@
         let capturedImage = null;
         let receipts = [];
         let receiptCounter = 0;
+
+        // ============================================
+        // IMAGE PREPROCESSING FOR BETTER OCR
+        // Based on open-source best practices for receipt scanning
+        // ============================================
+
+        /**
+         * Main preprocessing pipeline for receipt images
+         * Applies multiple enhancement techniques optimized for phone camera captures
+         */
+        async function preprocessImage(imageDataUrl, options = {}) {
+            const {
+                grayscale = true,
+                enhanceContrast = true,
+                contrastLevel = 1.5,
+                brightness = 10,
+                sharpen = true,
+                adaptiveThreshold = false,
+                denoise = true
+            } = options;
+
+            return new Promise((resolve) => {
+                const img = new Image();
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    ctx.drawImage(img, 0, 0);
+
+                    let imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    let data = imageData.data;
+
+                    // Step 1: Convert to grayscale (critical for OCR)
+                    if (grayscale) {
+                        for (let i = 0; i < data.length; i += 4) {
+                            // Luminosity method - better for text
+                            const gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+                            data[i] = data[i + 1] = data[i + 2] = gray;
+                        }
+                    }
+
+                    // Step 2: Enhance contrast and brightness
+                    if (enhanceContrast) {
+                        const factor = (259 * (contrastLevel * 100 + 255)) / (255 * (259 - contrastLevel * 100));
+                        for (let i = 0; i < data.length; i += 4) {
+                            data[i] = clamp(factor * (data[i] - 128) + 128 + brightness);
+                            data[i + 1] = clamp(factor * (data[i + 1] - 128) + 128 + brightness);
+                            data[i + 2] = clamp(factor * (data[i + 2] - 128) + 128 + brightness);
+                        }
+                    }
+
+                    // Step 3: Simple noise reduction (3x3 median-like filter)
+                    if (denoise) {
+                        imageData = applyNoiseReduction(ctx, imageData, canvas.width, canvas.height);
+                        data = imageData.data;
+                    }
+
+                    // Step 4: Sharpen edges (helps with blurry phone captures)
+                    if (sharpen) {
+                        imageData = applySharpen(ctx, imageData, canvas.width, canvas.height);
+                        data = imageData.data;
+                    }
+
+                    // Step 5: Adaptive thresholding (binarization for very poor quality)
+                    if (adaptiveThreshold) {
+                        imageData = applyAdaptiveThreshold(imageData, canvas.width, canvas.height);
+                        data = imageData.data;
+                    }
+
+                    ctx.putImageData(imageData, 0, 0);
+                    resolve(canvas.toDataURL('image/png'));
+                };
+                img.src = imageDataUrl;
+            });
+        }
+
+        function clamp(value) {
+            return Math.max(0, Math.min(255, value));
+        }
+
+        /**
+         * Simple noise reduction using a box blur approach
+         * Helps with grainy phone camera images
+         */
+        function applyNoiseReduction(ctx, imageData, width, height) {
+            const data = imageData.data;
+            const copy = new Uint8ClampedArray(data);
+
+            for (let y = 1; y < height - 1; y++) {
+                for (let x = 1; x < width - 1; x++) {
+                    const idx = (y * width + x) * 4;
+
+                    // Simple 3x3 average for noise reduction
+                    for (let c = 0; c < 3; c++) {
+                        let sum = 0;
+                        let count = 0;
+                        for (let dy = -1; dy <= 1; dy++) {
+                            for (let dx = -1; dx <= 1; dx++) {
+                                const nidx = ((y + dy) * width + (x + dx)) * 4 + c;
+                                sum += copy[nidx];
+                                count++;
+                            }
+                        }
+                        // Only apply if pixel is an outlier (noise)
+                        const avg = sum / count;
+                        if (Math.abs(copy[idx + c] - avg) > 30) {
+                            data[idx + c] = avg;
+                        }
+                    }
+                }
+            }
+            return imageData;
+        }
+
+        /**
+         * Sharpen filter using unsharp mask technique
+         * Essential for slightly blurry phone captures
+         */
+        function applySharpen(ctx, imageData, width, height) {
+            const data = imageData.data;
+            const copy = new Uint8ClampedArray(data);
+
+            // Sharpening kernel
+            const kernel = [
+                0, -1, 0,
+                -1, 5, -1,
+                0, -1, 0
+            ];
+
+            for (let y = 1; y < height - 1; y++) {
+                for (let x = 1; x < width - 1; x++) {
+                    const idx = (y * width + x) * 4;
+
+                    for (let c = 0; c < 3; c++) {
+                        let sum = 0;
+                        let ki = 0;
+                        for (let dy = -1; dy <= 1; dy++) {
+                            for (let dx = -1; dx <= 1; dx++) {
+                                const nidx = ((y + dy) * width + (x + dx)) * 4 + c;
+                                sum += copy[nidx] * kernel[ki++];
+                            }
+                        }
+                        data[idx + c] = clamp(sum);
+                    }
+                }
+            }
+            return imageData;
+        }
+
+        /**
+         * Adaptive thresholding for binarization
+         * Based on Sauvola's method - works well for receipts with uneven lighting
+         */
+        function applyAdaptiveThreshold(imageData, width, height, windowSize = 15, k = 0.2) {
+            const data = imageData.data;
+            const gray = new Float32Array(width * height);
+
+            // Extract grayscale values
+            for (let i = 0; i < width * height; i++) {
+                gray[i] = data[i * 4];
+            }
+
+            // Calculate integral image for fast local mean/variance
+            const integralSum = new Float32Array(width * height);
+            const integralSqSum = new Float32Array(width * height);
+
+            for (let y = 0; y < height; y++) {
+                let rowSum = 0, rowSqSum = 0;
+                for (let x = 0; x < width; x++) {
+                    const idx = y * width + x;
+                    const val = gray[idx];
+                    rowSum += val;
+                    rowSqSum += val * val;
+
+                    if (y === 0) {
+                        integralSum[idx] = rowSum;
+                        integralSqSum[idx] = rowSqSum;
+                    } else {
+                        integralSum[idx] = integralSum[(y - 1) * width + x] + rowSum;
+                        integralSqSum[idx] = integralSqSum[(y - 1) * width + x] + rowSqSum;
+                    }
+                }
+            }
+
+            const halfWin = Math.floor(windowSize / 2);
+            const R = 128; // Dynamic range for Sauvola
+
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    const x1 = Math.max(0, x - halfWin - 1);
+                    const y1 = Math.max(0, y - halfWin - 1);
+                    const x2 = Math.min(width - 1, x + halfWin);
+                    const y2 = Math.min(height - 1, y + halfWin);
+
+                    const count = (x2 - x1) * (y2 - y1);
+
+                    // Get sum and squared sum for the window
+                    let sum = integralSum[y2 * width + x2];
+                    let sqSum = integralSqSum[y2 * width + x2];
+
+                    if (x1 > 0) {
+                        sum -= integralSum[y2 * width + x1];
+                        sqSum -= integralSqSum[y2 * width + x1];
+                    }
+                    if (y1 > 0) {
+                        sum -= integralSum[y1 * width + x2];
+                        sqSum -= integralSqSum[y1 * width + x2];
+                    }
+                    if (x1 > 0 && y1 > 0) {
+                        sum += integralSum[y1 * width + x1];
+                        sqSum += integralSqSum[y1 * width + x1];
+                    }
+
+                    const mean = sum / count;
+                    const variance = (sqSum / count) - (mean * mean);
+                    const stdDev = Math.sqrt(Math.max(0, variance));
+
+                    // Sauvola threshold
+                    const threshold = mean * (1 + k * (stdDev / R - 1));
+
+                    const idx = (y * width + x) * 4;
+                    const val = gray[y * width + x] > threshold ? 255 : 0;
+                    data[idx] = data[idx + 1] = data[idx + 2] = val;
+                }
+            }
+
+            return imageData;
+        }
+
+        /**
+         * Multi-pass OCR with different preprocessing strategies
+         * Based on research showing different preprocessing works for different receipt qualities
+         */
+        async function performOCRWithFallback(imageDataUrl) {
+            const strategies = [
+                // Strategy 1: Standard enhancement (best for decent quality captures)
+                {
+                    name: 'Standard Enhancement',
+                    options: { grayscale: true, enhanceContrast: true, contrastLevel: 1.4, brightness: 5, sharpen: true, denoise: true, adaptiveThreshold: false }
+                },
+                // Strategy 2: High contrast (for faded receipts)
+                {
+                    name: 'High Contrast',
+                    options: { grayscale: true, enhanceContrast: true, contrastLevel: 2.0, brightness: 15, sharpen: true, denoise: true, adaptiveThreshold: false }
+                },
+                // Strategy 3: Adaptive threshold (for uneven lighting/shadows)
+                {
+                    name: 'Adaptive Threshold',
+                    options: { grayscale: true, enhanceContrast: true, contrastLevel: 1.2, brightness: 0, sharpen: false, denoise: true, adaptiveThreshold: true }
+                },
+                // Strategy 4: Minimal processing (for already good images)
+                {
+                    name: 'Minimal Processing',
+                    options: { grayscale: true, enhanceContrast: false, sharpen: false, denoise: false, adaptiveThreshold: false }
+                }
+            ];
+
+            let bestResult = { text: '', confidence: 0, strategy: '' };
+
+            for (const strategy of strategies) {
+                try {
+                    console.log(`Trying OCR strategy: ${strategy.name}`);
+
+                    const processedImage = await preprocessImage(imageDataUrl, strategy.options);
+
+                    const result = await Tesseract.recognize(processedImage, 'eng', {
+                        logger: m => {
+                            if (m.status === 'recognizing text') {
+                                console.log(`${strategy.name}: ${Math.round(m.progress * 100)}%`);
+                            }
+                        },
+                        // Tesseract configuration optimized for receipts
+                        // PSM 6: Assume a single uniform block of text
+                        // PSM 4: Assume a single column of text of variable sizes
+                        tessedit_pageseg_mode: '6',
+                        // Preserve interword spaces
+                        preserve_interword_spaces: '1'
+                    });
+
+                    const confidence = result.data.confidence;
+                    console.log(`${strategy.name} confidence: ${confidence}%`);
+
+                    // Keep track of best result
+                    if (confidence > bestResult.confidence) {
+                        bestResult = {
+                            text: result.data.text,
+                            confidence: confidence,
+                            strategy: strategy.name,
+                            words: result.data.words || []
+                        };
+                    }
+
+                    // If we get good confidence, use it
+                    if (confidence > 70) {
+                        console.log(`Using result from: ${strategy.name} with ${confidence}% confidence`);
+                        return bestResult;
+                    }
+                } catch (err) {
+                    console.error(`Strategy ${strategy.name} failed:`, err);
+                }
+            }
+
+            // Return best result even if below threshold
+            console.log(`Best result from: ${bestResult.strategy} with ${bestResult.confidence}% confidence`);
+            return bestResult;
+        }
+
+        /**
+         * Post-process OCR text to fix common recognition errors
+         * Based on analysis of common OCR mistakes on receipts
+         */
+        function postProcessOCRText(text) {
+            let processed = text;
+
+            // Common OCR substitution errors
+            const corrections = [
+                // Letter-number confusions
+                [/\bO(\d)/g, '0$1'],  // O followed by digit -> 0
+                [/(\d)O/g, '$10'],    // digit followed by O -> 0
+                [/\bl(\d)/g, '1$1'],  // lowercase l followed by digit -> 1
+                [/(\d)l/g, '$11'],    // digit followed by l -> 1
+                [/\bI(\d)/g, '1$1'],  // I followed by digit -> 1
+                [/(\d)I/g, '$11'],    // digit followed by I -> 1
+                [/S(\d)/g, '5$1'],    // S before digit -> 5 (in numeric context)
+                [/(\d)S/g, '$15'],    // digit before S -> 5
+                [/B(\d)/g, '8$1'],    // B before digit -> 8
+                [/(\d)B/g, '$18'],    // digit before B -> 8
+
+                // Common word corrections for receipts
+                [/\bTOTAI\b/gi, 'TOTAL'],
+                [/\bT0TAL\b/gi, 'TOTAL'],
+                [/\bTOTAL\:/gi, 'TOTAL:'],
+                [/\bSUBTOTAI\b/gi, 'SUBTOTAL'],
+                [/\bSUBT0TAL\b/gi, 'SUBTOTAL'],
+                [/\bTAX\:/gi, 'TAX:'],
+                [/\bGST\:/gi, 'GST:'],
+                [/\bCASH\:/gi, 'CASH:'],
+                [/\bCHANGE\:/gi, 'CHANGE:'],
+                [/\bBALANCE\:/gi, 'BALANCE:'],
+                [/\bAMOUNT\:/gi, 'AMOUNT:'],
+
+                // Currency symbol fixes
+                [/\$\s+(\d)/g, '$$$1'],  // Remove space after $
+                [/\b\$\./g, '$0.'],      // $.xx -> $0.xx
+            ];
+
+            for (const [pattern, replacement] of corrections) {
+                processed = processed.replace(pattern, replacement);
+            }
+
+            return processed;
+        }
 
         const video = document.getElementById('video');
         const canvas = document.getElementById('canvas');
@@ -494,26 +879,29 @@
             if (!capturedImage) return;
 
             loading.style.display = 'block';
+            document.querySelector('#loading p').textContent = 'Preprocessing image...';
             previewContainer.style.display = 'none';
             processBtn.disabled = true;
             hideMessages();
 
             try {
-                // Perform OCR
-                const result = await Tesseract.recognize(
-                    capturedImage,
-                    'eng',
-                    {
-                        logger: m => console.log(m)
-                    }
-                );
+                // Perform OCR with preprocessing and fallback strategies
+                document.querySelector('#loading p').textContent = 'Analyzing image with multiple strategies...';
 
-                const text = result.data.text;
-                console.log('Extracted text:', text);
+                const ocrResult = await performOCRWithFallback(capturedImage);
+
+                // Post-process the text to fix common OCR errors
+                const rawText = ocrResult.text;
+                const text = postProcessOCRText(rawText);
+
+                console.log('Raw OCR text:', rawText);
+                console.log('Processed text:', text);
+                console.log('OCR Confidence:', ocrResult.confidence + '%');
+                console.log('Best strategy:', ocrResult.strategy);
 
                 // Extract information
                 const extracted = extractReceiptInfo(text);
-                
+
                 // Create receipt object
                 receiptCounter++;
                 const receipt = {
@@ -523,21 +911,25 @@
                     total: extracted.total || 'Not found',
                     gst: extracted.gst || 'Not found',
                     image: capturedImage,
-                    timestamp: new Date().toISOString()
+                    timestamp: new Date().toISOString(),
+                    ocrConfidence: ocrResult.confidence,
+                    ocrStrategy: ocrResult.strategy,
+                    rawText: text // Store for debugging
                 };
 
                 // Add to receipts array
                 receipts.push(receipt);
-                
+
                 // Update UI
                 updateReceiptsList();
                 updateReceiptCount();
-                
-                // Show success and reset for next receipt
-                showSuccess(`Receipt #${receiptCounter} added successfully!`);
+
+                // Show success with confidence info
+                const confidenceEmoji = ocrResult.confidence > 70 ? '' : (ocrResult.confidence > 50 ? '' : '');
+                showSuccess(`Receipt #${receiptCounter} added! ${confidenceEmoji} OCR Confidence: ${Math.round(ocrResult.confidence)}% (${ocrResult.strategy})`);
                 capturedImage = null;
                 fileInput.value = '';
-                
+
                 // Show export section if we have receipts
                 if (receipts.length > 0) {
                     exportSection.style.display = 'block';
@@ -549,6 +941,7 @@
                 previewContainer.style.display = 'block';
             } finally {
                 loading.style.display = 'none';
+                document.querySelector('#loading p').textContent = 'Processing receipt...';
                 processBtn.disabled = false;
             }
         });
@@ -556,14 +949,32 @@
         // Update receipts list
         function updateReceiptsList() {
             receiptsContainer.innerHTML = '';
-            
+
             receipts.forEach((receipt, index) => {
                 const card = document.createElement('div');
                 card.className = 'receipt-card';
+
+                // Determine confidence level for badge
+                const confidence = receipt.ocrConfidence || 0;
+                let confidenceClass, confidenceLabel;
+                if (confidence >= 70) {
+                    confidenceClass = 'confidence-high';
+                    confidenceLabel = 'High';
+                } else if (confidence >= 50) {
+                    confidenceClass = 'confidence-medium';
+                    confidenceLabel = 'Medium';
+                } else {
+                    confidenceClass = 'confidence-low';
+                    confidenceLabel = 'Low';
+                }
+
                 card.innerHTML = `
                     <div class="receipt-card-header">
-                        <span class="receipt-number">Receipt #${receipt.id}</span>
-                        <button class="delete-receipt" onclick="deleteReceipt(${index})">🗑️ Delete</button>
+                        <span class="receipt-number">
+                            Receipt #${receipt.id}
+                            <span class="confidence-badge ${confidenceClass}">${Math.round(confidence)}% ${confidenceLabel}</span>
+                        </span>
+                        <button class="delete-receipt" onclick="deleteReceipt(${index})">Delete</button>
                     </div>
                     <img src="${receipt.image}" class="receipt-thumbnail" alt="Receipt ${receipt.id}">
                     <div class="receipt-info">
@@ -584,6 +995,7 @@
                             <span>${receipt.gst}</span>
                         </div>
                     </div>
+                    <div class="ocr-strategy">Processed with: ${receipt.ocrStrategy || 'Standard'}</div>
                 `;
                 receiptsContainer.appendChild(card);
             });
@@ -624,30 +1036,34 @@
                 
                 // Create summary sheet
                 const summaryData = [
-                    ['Receipt Scanner - Batch Export'],
+                    ['Receipt Scanner - Batch Export (Enhanced OCR)'],
                     ['Exported:', new Date().toLocaleString()],
                     ['Total Receipts:', receipts.length],
                     [],
-                    ['Receipt #', 'Business Name', 'Date', 'Total Amount', 'GST/Tax Amount']
+                    ['Receipt #', 'Business Name', 'Date', 'Total Amount', 'GST/Tax Amount', 'OCR Confidence', 'Processing Method']
                 ];
-                
+
                 receipts.forEach(receipt => {
                     summaryData.push([
                         receipt.id,
                         receipt.businessName,
                         receipt.date,
                         receipt.total,
-                        receipt.gst
+                        receipt.gst,
+                        `${Math.round(receipt.ocrConfidence || 0)}%`,
+                        receipt.ocrStrategy || 'Standard'
                     ]);
                 });
-                
+
                 const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
                 summarySheet['!cols'] = [
                     { wch: 12 },
                     { wch: 25 },
                     { wch: 15 },
                     { wch: 15 },
-                    { wch: 15 }
+                    { wch: 15 },
+                    { wch: 15 },
+                    { wch: 20 }
                 ];
                 
                 XLSX.utils.book_append_sheet(workbook, summarySheet, 'Summary');
@@ -662,12 +1078,16 @@
                         ['Date', receipt.date],
                         ['Total Amount', receipt.total],
                         ['GST/Tax Amount', receipt.gst],
-                        ['Processed', new Date(receipt.timestamp).toLocaleString()]
+                        ['Processed', new Date(receipt.timestamp).toLocaleString()],
+                        ['OCR Confidence', `${Math.round(receipt.ocrConfidence || 0)}%`],
+                        ['Processing Method', receipt.ocrStrategy || 'Standard'],
+                        [],
+                        ['Note: Low confidence scores may require manual verification']
                     ];
-                    
+
                     const detailSheet = XLSX.utils.aoa_to_sheet(detailData);
-                    detailSheet['!cols'] = [{ wch: 20 }, { wch: 30 }];
-                    
+                    detailSheet['!cols'] = [{ wch: 20 }, { wch: 40 }];
+
                     XLSX.utils.book_append_sheet(workbook, detailSheet, `Receipt ${receipt.id}`);
                 });
                 
@@ -752,6 +1172,10 @@
             window.location.href = `mailto:?subject=${subject}&body=${body}`;
         }
 
+        /**
+         * Enhanced receipt information extraction
+         * Uses multiple pattern matching strategies and scoring
+         */
         function extractReceiptInfo(text) {
             const info = {
                 businessName: null,
@@ -760,59 +1184,162 @@
                 gst: null
             };
 
-            const lines = text.split('\n').map(line => line.trim()).filter(line => line);
+            const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+            const upperText = text.toUpperCase();
 
-            // Extract business name (usually first few non-empty lines)
-            if (lines.length > 0) {
-                for (let i = 0; i < Math.min(5, lines.length); i++) {
-                    if (lines[i].length > 3 && !lines[i].match(/^\d+$/) && !lines[i].match(/^[\d\s\-\/]+$/)) {
-                        info.businessName = lines[i];
+            // ============================================
+            // BUSINESS NAME EXTRACTION
+            // Strategy: Look at first few lines, prefer lines with letters,
+            // skip common receipt headers and pure numbers
+            // ============================================
+
+            const skipPatterns = [
+                /^[\d\s\-\/\.\:\,]+$/,           // Pure numbers/punctuation
+                /^\*+$/,                          // Separator lines
+                /^-+$/,                           // Dashes
+                /^=+$/,                           // Equals
+                /^(tax\s*invoice|receipt|docket)/i,  // Generic headers
+                /^(abn|acn|gst)\s*:?\s*\d/i,     // Tax numbers
+                /^tel|phone|fax|www\.|http/i,    // Contact info
+                /^\d{2}[\/\-]\d{2}[\/\-]\d{2,4}/, // Dates
+                /^(eftpos|visa|mastercard|amex)/i, // Payment methods
+            ];
+
+            for (let i = 0; i < Math.min(8, lines.length); i++) {
+                const line = lines[i];
+                if (line.length < 3) continue;
+
+                let skip = false;
+                for (const pattern of skipPatterns) {
+                    if (pattern.test(line)) {
+                        skip = true;
                         break;
                     }
                 }
+
+                // Should have at least some letters
+                if (!skip && /[a-zA-Z]{2,}/.test(line)) {
+                    // Clean up the business name
+                    info.businessName = line
+                        .replace(/[*\-=_]{2,}/g, '')  // Remove decorative chars
+                        .replace(/\s{2,}/g, ' ')       // Normalize spaces
+                        .trim();
+                    break;
+                }
             }
 
-            // Extract date (various formats)
+            // ============================================
+            // DATE EXTRACTION
+            // Support many international formats
+            // ============================================
+
             const datePatterns = [
-                /\b(\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4})\b/,
-                /\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{2,4})\b/i,
-                /\b(\d{2,4}[-\/]\d{1,2}[-\/]\d{1,2})\b/
+                // DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
+                /\b(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})\b/,
+                // YYYY/MM/DD or YYYY-MM-DD
+                /\b(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})\b/,
+                // DD Mon YYYY or DD Month YYYY
+                /\b(\d{1,2})\s+(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(\d{2,4})\b/i,
+                // Mon DD, YYYY
+                /\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(\d{1,2}),?\s+(\d{2,4})\b/i,
+                // DD Mon YY (short year)
+                /\b(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s*(\d{2})\b/i,
             ];
 
             for (const pattern of datePatterns) {
                 const match = text.match(pattern);
                 if (match) {
-                    info.date = match[1];
+                    info.date = match[0];
                     break;
                 }
             }
 
-            // Extract total amount
+            // ============================================
+            // TOTAL AMOUNT EXTRACTION
+            // Look for keywords and largest amount as fallback
+            // ============================================
+
             const totalPatterns = [
-                /total[:\s]*\$?\s*([\d,]+\.?\d{0,2})/i,
-                /amount[:\s]*\$?\s*([\d,]+\.?\d{0,2})/i,
-                /balance[:\s]*\$?\s*([\d,]+\.?\d{0,2})/i
+                // Explicit total keywords with amount
+                /(?:grand\s*)?total\s*(?:due)?[:\s]*[\$]?\s*([\d,]+\.?\d{0,2})/i,
+                /(?:amount\s*)?(?:due|owing|payable)[:\s]*[\$]?\s*([\d,]+\.?\d{0,2})/i,
+                /balance\s*(?:due)?[:\s]*[\$]?\s*([\d,]+\.?\d{0,2})/i,
+                /(?:you\s*)?(?:paid|pay)[:\s]*[\$]?\s*([\d,]+\.?\d{0,2})/i,
+                /(?:net|nett)\s*(?:total)?[:\s]*[\$]?\s*([\d,]+\.?\d{0,2})/i,
+                // Amount after $ on a line with TOTAL
+                /total.*\$\s*([\d,]+\.?\d{0,2})/i,
+                // TOTAL at end of line
+                /\$\s*([\d,]+\.?\d{0,2})\s*(?:total)?$/im,
             ];
 
             for (const pattern of totalPatterns) {
                 const match = text.match(pattern);
-                if (match) {
-                    info.total = '$' + match[1];
-                    break;
+                if (match && match[1]) {
+                    const value = parseFloat(match[1].replace(/,/g, ''));
+                    if (value > 0 && value < 100000) { // Sanity check
+                        info.total = '$' + match[1];
+                        break;
+                    }
                 }
             }
 
-            // Extract GST/Tax
+            // Fallback: Find the largest dollar amount if no explicit total found
+            if (!info.total) {
+                const amountPattern = /\$\s*([\d,]+\.\d{2})/g;
+                let match;
+                let maxAmount = 0;
+                let maxAmountStr = '';
+
+                while ((match = amountPattern.exec(text)) !== null) {
+                    const amount = parseFloat(match[1].replace(/,/g, ''));
+                    if (amount > maxAmount && amount < 100000) {
+                        maxAmount = amount;
+                        maxAmountStr = match[1];
+                    }
+                }
+
+                if (maxAmountStr) {
+                    info.total = '$' + maxAmountStr;
+                }
+            }
+
+            // ============================================
+            // GST/TAX EXTRACTION
+            // Look for tax-related keywords
+            // ============================================
+
             const gstPatterns = [
-                /(?:gst|tax)[:\s]*\$?\s*([\d,]+\.?\d{0,2})/i,
-                /(?:sales tax|vat)[:\s]*\$?\s*([\d,]+\.?\d{0,2})/i
+                // GST specific
+                /gst\s*(?:amount)?[:\s]*[\$]?\s*([\d,]+\.?\d{0,2})/i,
+                /(?:inc(?:l)?\.?\s*)?gst[:\s]*[\$]?\s*([\d,]+\.?\d{0,2})/i,
+                // Tax generic
+                /(?:sales\s*)?tax\s*(?:amount)?[:\s]*[\$]?\s*([\d,]+\.?\d{0,2})/i,
+                /vat[:\s]*[\$]?\s*([\d,]+\.?\d{0,2})/i,
+                /hst[:\s]*[\$]?\s*([\d,]+\.?\d{0,2})/i,
+                // Tax percentage patterns (extract the amount, not percentage)
+                /tax\s*\(?\d+\.?\d*%?\)?[:\s]*[\$]?\s*([\d,]+\.?\d{0,2})/i,
+                // Look for line with TAX and an amount
+                /\btax\b.*\$\s*([\d,]+\.?\d{0,2})/i,
             ];
 
             for (const pattern of gstPatterns) {
                 const match = text.match(pattern);
-                if (match) {
-                    info.gst = '$' + match[1];
-                    break;
+                if (match && match[1]) {
+                    const value = parseFloat(match[1].replace(/,/g, ''));
+                    if (value > 0 && value < 10000) { // Tax shouldn't be huge
+                        info.gst = '$' + match[1];
+                        break;
+                    }
+                }
+            }
+
+            // Additional validation: GST should be less than total
+            if (info.gst && info.total) {
+                const gstValue = parseFloat(info.gst.replace(/[$,]/g, ''));
+                const totalValue = parseFloat(info.total.replace(/[$,]/g, ''));
+                if (gstValue >= totalValue) {
+                    // GST higher than total doesn't make sense - might have extracted wrong value
+                    console.warn('GST value seems incorrect (higher than total), may need manual review');
                 }
             }
 
