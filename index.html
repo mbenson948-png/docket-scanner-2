@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Receipt Scanner - Batch Mode</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px 20px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+
+        .batch-counter {
+            background: rgba(255,255,255,0.2);
+            padding: 10px 20px;
+            border-radius: 20px;
+            margin-top: 15px;
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .content {
+            padding: 20px;
+        }
+
+        .camera-section {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        #videoContainer {
+            position: relative;
+            width: 100%;
+            max-width: 100%;
+            margin: 20px 0;
+            background: #000;
+            border-radius: 10px;
+            overflow: hidden;
+            display: none;
+        }
+
+        #video {
+            width: 100%;
+            display: block;
+        }
+
+        .capture-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 80%;
+            height: 60%;
+            border: 3px dashed rgba(255,255,255,0.7);
+            border-radius: 10px;
+            pointer-events: none;
+        }
+
+        #canvas {
+            display: none;
+        }
+
+        .preview-container {
+            margin: 20px 0;
+            display: none;
+        }
+
+        #preview {
+            width: 100%;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 16px 32px;
+            font-size: 16px;
+            font-weight: 600;
+            border-radius: 10px;
+            cursor: pointer;
+            width: 100%;
+            margin: 10px 0;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        button:active {
+            transform: scale(0.98);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        button.secondary {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            box-shadow: 0 4px 12px rgba(245, 87, 108, 0.4);
+        }
+
+        button.success {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            box-shadow: 0 4px 12px rgba(79, 172, 254, 0.4);
+        }
+
+        button.done {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            box-shadow: 0 4px 12px rgba(56, 239, 125, 0.4);
+            font-size: 18px;
+            padding: 20px 32px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+            display: none;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error {
+            background: #fee;
+            color: #c33;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 10px 0;
+            display: none;
+            border-left: 4px solid #c33;
+        }
+
+        .success-message {
+            background: #d4edda;
+            color: #155724;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 10px 0;
+            display: none;
+            border-left: 4px solid #28a745;
+        }
+
+        .instructions {
+            background: #e7f3ff;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            border-left: 4px solid #667eea;
+        }
+
+        .instructions h4 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .instructions ul {
+            margin-left: 20px;
+            color: #666;
+            line-height: 1.6;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        .file-input-label {
+            display: block;
+            background: white;
+            border: 2px dashed #667eea;
+            color: #667eea;
+            padding: 16px 32px;
+            font-size: 16px;
+            font-weight: 600;
+            border-radius: 10px;
+            cursor: pointer;
+            text-align: center;
+            margin: 10px 0;
+            transition: all 0.2s;
+        }
+
+        .file-input-label:hover {
+            background: #f8f9ff;
+            border-color: #764ba2;
+            color: #764ba2;
+        }
+
+        .receipts-list {
+            margin-top: 20px;
+            display: none;
+        }
+
+        .receipt-card {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 15px;
+            margin: 10px 0;
+            border-left: 4px solid #667eea;
+        }
+
+        .receipt-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .receipt-number {
+            font-weight: 600;
+            color: #667eea;
+            font-size: 16px;
+        }
+
+        .delete-receipt {
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 5px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 12px;
+            width: auto;
+            margin: 0;
+        }
+
+        .receipt-thumbnail {
+            width: 100%;
+            height: 150px;
+            object-fit: cover;
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+
+        .receipt-info {
+            font-size: 14px;
+            color: #666;
+            line-height: 1.6;
+        }
+
+        .receipt-info-row {
+            display: flex;
+            margin: 5px 0;
+        }
+
+        .receipt-info-label {
+            font-weight: 600;
+            min-width: 100px;
+        }
+
+        .export-section {
+            margin-top: 20px;
+            display: none;
+        }
+
+        .current-receipt-preview {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            display: none;
+        }
+
+        .current-receipt-preview h4 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📸 Receipt Scanner</h1>
+            <p>Batch Processing Mode</p>
+            <div class="batch-counter">
+                Receipts Captured: <span id="receiptCount">0</span>
+            </div>
+        </div>
+
+        <div class="content">
+            <div class="instructions">
+                <h4>Batch Processing:</h4>
+                <ul>
+                    <li>Capture or upload as many receipts as you need</li>
+                    <li>Each receipt is processed and stored with its image</li>
+                    <li>Click "I'm Done" when finished</li>
+                    <li>Export all receipts to Excel + ZIP file with images</li>
+                </ul>
+            </div>
+
+            <div class="camera-section">
+                <button id="startCamera">📷 Open Camera</button>
+                <label for="fileInput" class="file-input-label">
+                    📁 Upload from Gallery
+                </label>
+                <input type="file" id="fileInput" accept="image/*" capture="environment">
+                
+                <div id="videoContainer">
+                    <video id="video" autoplay playsinline></video>
+                    <div class="capture-overlay"></div>
+                </div>
+                
+                <button id="captureBtn" style="display:none;" class="secondary">📸 Capture Photo</button>
+                <button id="stopCamera" style="display:none;">❌ Close Camera</button>
+            </div>
+
+            <canvas id="canvas"></canvas>
+
+            <div class="preview-container" id="previewContainer">
+                <img id="preview" alt="Captured receipt">
+                <button id="processBtn" class="success">🔍 Extract & Add to Batch</button>
+                <button id="retakeBtn" class="secondary">↺ Retake Photo</button>
+            </div>
+
+            <div class="current-receipt-preview" id="currentReceiptPreview">
+                <h4>Processing Current Receipt...</h4>
+                <div class="receipt-info" id="currentReceiptInfo"></div>
+            </div>
+
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <p>Processing receipt...</p>
+            </div>
+
+            <div class="error" id="error"></div>
+            <div class="success-message" id="successMessage"></div>
+
+            <div class="receipts-list" id="receiptsList">
+                <h3 style="color: #667eea; margin-bottom: 15px;">📋 Captured Receipts</h3>
+                <div id="receiptsContainer"></div>
+            </div>
+
+            <div class="export-section" id="exportSection">
+                <button id="doneBtn" class="done">✅ I'm Done - Export All</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script>
+        let stream = null;
+        let capturedImage = null;
+        let receipts = [];
+        let receiptCounter = 0;
+
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const preview = document.getElementById('preview');
+        const startCameraBtn = document.getElementById('startCamera');
+        const captureBtn = document.getElementById('captureBtn');
+        const stopCameraBtn = document.getElementById('stopCamera');
+        const processBtn = document.getElementById('processBtn');
+        const retakeBtn = document.getElementById('retakeBtn');
+        const doneBtn = document.getElementById('doneBtn');
+        const fileInput = document.getElementById('fileInput');
+        const videoContainer = document.getElementById('videoContainer');
+        const previewContainer = document.getElementById('previewContainer');
+        const receiptsList = document.getElementById('receiptsList');
+        const receiptsContainer = document.getElementById('receiptsContainer');
+        const exportSection = document.getElementById('exportSection');
+        const loading = document.getElementById('loading');
+        const error = document.getElementById('error');
+        const successMessage = document.getElementById('successMessage');
+        const receiptCount = document.getElementById('receiptCount');
+        const currentReceiptPreview = document.getElementById('currentReceiptPreview');
+        const currentReceiptInfo = document.getElementById('currentReceiptInfo');
+
+        // Start camera
+        startCameraBtn.addEventListener('click', async () => {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { 
+                        facingMode: 'environment',
+                        width: { ideal: 1920 },
+                        height: { ideal: 1080 }
+                    } 
+                });
+                video.srcObject = stream;
+                videoContainer.style.display = 'block';
+                captureBtn.style.display = 'block';
+                stopCameraBtn.style.display = 'block';
+                startCameraBtn.style.display = 'none';
+                hideMessages();
+            } catch (err) {
+                showError('Camera access denied. Please allow camera permissions or use "Upload from Gallery".');
+            }
+        });
+
+        // Stop camera
+        stopCameraBtn.addEventListener('click', () => {
+            stopCamera();
+        });
+
+        function stopCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+            }
+            videoContainer.style.display = 'none';
+            captureBtn.style.display = 'none';
+            stopCameraBtn.style.display = 'none';
+            startCameraBtn.style.display = 'block';
+        }
+
+        // Capture photo
+        captureBtn.addEventListener('click', () => {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0);
+            
+            capturedImage = canvas.toDataURL('image/jpeg', 0.95);
+            preview.src = capturedImage;
+            
+            stopCamera();
+            previewContainer.style.display = 'block';
+            hideMessages();
+        });
+
+        // File upload
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    capturedImage = event.target.result;
+                    preview.src = capturedImage;
+                    previewContainer.style.display = 'block';
+                    stopCamera();
+                    hideMessages();
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        // Retake photo
+        retakeBtn.addEventListener('click', () => {
+            previewContainer.style.display = 'none';
+            currentReceiptPreview.style.display = 'none';
+            capturedImage = null;
+            fileInput.value = '';
+            hideMessages();
+        });
+
+        // Process and add to batch
+        processBtn.addEventListener('click', async () => {
+            if (!capturedImage) return;
+
+            loading.style.display = 'block';
+            previewContainer.style.display = 'none';
+            processBtn.disabled = true;
+            hideMessages();
+
+            try {
+                // Perform OCR
+                const result = await Tesseract.recognize(
+                    capturedImage,
+                    'eng',
+                    {
+                        logger: m => console.log(m)
+                    }
+                );
+
+                const text = result.data.text;
+                console.log('Extracted text:', text);
+
+                // Extract information
+                const extracted = extractReceiptInfo(text);
+                
+                // Create receipt object
+                receiptCounter++;
+                const receipt = {
+                    id: receiptCounter,
+                    businessName: extracted.businessName || 'Not found',
+                    date: extracted.date || 'Not found',
+                    total: extracted.total || 'Not found',
+                    gst: extracted.gst || 'Not found',
+                    image: capturedImage,
+                    timestamp: new Date().toISOString()
+                };
+
+                // Add to receipts array
+                receipts.push(receipt);
+                
+                // Update UI
+                updateReceiptsList();
+                updateReceiptCount();
+                
+                // Show success and reset for next receipt
+                showSuccess(`Receipt #${receiptCounter} added successfully!`);
+                capturedImage = null;
+                fileInput.value = '';
+                
+                // Show export section if we have receipts
+                if (receipts.length > 0) {
+                    exportSection.style.display = 'block';
+                    receiptsList.style.display = 'block';
+                }
+
+            } catch (err) {
+                showError('Error processing image: ' + err.message);
+                previewContainer.style.display = 'block';
+            } finally {
+                loading.style.display = 'none';
+                processBtn.disabled = false;
+            }
+        });
+
+        // Update receipts list
+        function updateReceiptsList() {
+            receiptsContainer.innerHTML = '';
+            
+            receipts.forEach((receipt, index) => {
+                const card = document.createElement('div');
+                card.className = 'receipt-card';
+                card.innerHTML = `
+                    <div class="receipt-card-header">
+                        <span class="receipt-number">Receipt #${receipt.id}</span>
+                        <button class="delete-receipt" onclick="deleteReceipt(${index})">🗑️ Delete</button>
+                    </div>
+                    <img src="${receipt.image}" class="receipt-thumbnail" alt="Receipt ${receipt.id}">
+                    <div class="receipt-info">
+                        <div class="receipt-info-row">
+                            <span class="receipt-info-label">Business:</span>
+                            <span>${receipt.businessName}</span>
+                        </div>
+                        <div class="receipt-info-row">
+                            <span class="receipt-info-label">Date:</span>
+                            <span>${receipt.date}</span>
+                        </div>
+                        <div class="receipt-info-row">
+                            <span class="receipt-info-label">Total:</span>
+                            <span>${receipt.total}</span>
+                        </div>
+                        <div class="receipt-info-row">
+                            <span class="receipt-info-label">GST/Tax:</span>
+                            <span>${receipt.gst}</span>
+                        </div>
+                    </div>
+                `;
+                receiptsContainer.appendChild(card);
+            });
+        }
+
+        // Delete receipt
+        function deleteReceipt(index) {
+            if (confirm('Delete this receipt?')) {
+                receipts.splice(index, 1);
+                updateReceiptsList();
+                updateReceiptCount();
+                
+                if (receipts.length === 0) {
+                    receiptsList.style.display = 'none';
+                    exportSection.style.display = 'none';
+                }
+            }
+        }
+
+        // Update receipt count
+        function updateReceiptCount() {
+            receiptCount.textContent = receipts.length;
+        }
+
+        // Done button - Export everything
+        doneBtn.addEventListener('click', async () => {
+            if (receipts.length === 0) {
+                showError('No receipts to export!');
+                return;
+            }
+
+            loading.style.display = 'block';
+            doneBtn.disabled = true;
+
+            try {
+                // Create Excel workbook
+                const workbook = XLSX.utils.book_new();
+                
+                // Create summary sheet
+                const summaryData = [
+                    ['Receipt Scanner - Batch Export'],
+                    ['Exported:', new Date().toLocaleString()],
+                    ['Total Receipts:', receipts.length],
+                    [],
+                    ['Receipt #', 'Business Name', 'Date', 'Total Amount', 'GST/Tax Amount']
+                ];
+                
+                receipts.forEach(receipt => {
+                    summaryData.push([
+                        receipt.id,
+                        receipt.businessName,
+                        receipt.date,
+                        receipt.total,
+                        receipt.gst
+                    ]);
+                });
+                
+                const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
+                summarySheet['!cols'] = [
+                    { wch: 12 },
+                    { wch: 25 },
+                    { wch: 15 },
+                    { wch: 15 },
+                    { wch: 15 }
+                ];
+                
+                XLSX.utils.book_append_sheet(workbook, summarySheet, 'Summary');
+                
+                // Create individual sheets for each receipt
+                receipts.forEach(receipt => {
+                    const detailData = [
+                        [`Receipt #${receipt.id} Details`],
+                        [],
+                        ['Field', 'Value'],
+                        ['Business Name', receipt.businessName],
+                        ['Date', receipt.date],
+                        ['Total Amount', receipt.total],
+                        ['GST/Tax Amount', receipt.gst],
+                        ['Processed', new Date(receipt.timestamp).toLocaleString()]
+                    ];
+                    
+                    const detailSheet = XLSX.utils.aoa_to_sheet(detailData);
+                    detailSheet['!cols'] = [{ wch: 20 }, { wch: 30 }];
+                    
+                    XLSX.utils.book_append_sheet(workbook, detailSheet, `Receipt ${receipt.id}`);
+                });
+                
+                // Generate Excel file as blob
+                const excelBlob = new Blob(
+                    [s2ab(XLSX.write(workbook, { bookType: 'xlsx', type: 'binary' }))],
+                    { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
+                );
+                
+                // Create ZIP file
+                const zip = new JSZip();
+                
+                // Add Excel file
+                const timestamp = new Date().toISOString().split('T')[0];
+                zip.file(`receipts_${timestamp}.xlsx`, excelBlob);
+                
+                // Add images folder
+                const imagesFolder = zip.folder('receipt_images');
+                receipts.forEach(receipt => {
+                    // Convert base64 to blob
+                    const imageData = receipt.image.split(',')[1];
+                    imagesFolder.file(`receipt_${receipt.id}.jpg`, imageData, { base64: true });
+                });
+                
+                // Generate ZIP
+                const zipBlob = await zip.generateAsync({ type: 'blob' });
+                
+                // Download ZIP
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(zipBlob);
+                link.download = `receipts_batch_${timestamp}.zip`;
+                link.click();
+                
+                showSuccess(`✅ Successfully exported ${receipts.length} receipts with images!`);
+                
+                // Ask if user wants to email
+                setTimeout(() => {
+                    if (confirm('Export complete! Would you like to open your email to send the files?')) {
+                        openEmailWithSummary();
+                    }
+                }, 1000);
+
+            } catch (err) {
+                showError('Error creating export: ' + err.message);
+            } finally {
+                loading.style.display = 'none';
+                doneBtn.disabled = false;
+            }
+        });
+
+        // Helper function to convert string to array buffer
+        function s2ab(s) {
+            const buf = new ArrayBuffer(s.length);
+            const view = new Uint8Array(buf);
+            for (let i = 0; i < s.length; i++) {
+                view[i] = s.charCodeAt(i) & 0xFF;
+            }
+            return buf;
+        }
+
+        // Open email with summary
+        function openEmailWithSummary() {
+            let emailBody = 'Receipt Batch Summary:\n\n';
+            emailBody += `Total Receipts: ${receipts.length}\n`;
+            emailBody += `Export Date: ${new Date().toLocaleString()}\n\n`;
+            
+            receipts.forEach(receipt => {
+                emailBody += `--- Receipt #${receipt.id} ---\n`;
+                emailBody += `Business: ${receipt.businessName}\n`;
+                emailBody += `Date: ${receipt.date}\n`;
+                emailBody += `Total: ${receipt.total}\n`;
+                emailBody += `GST/Tax: ${receipt.gst}\n\n`;
+            });
+            
+            emailBody += '\nPlease find attached the ZIP file containing:\n';
+            emailBody += '- Excel spreadsheet with all receipt data\n';
+            emailBody += '- Individual receipt images (JPG format)';
+            
+            const subject = encodeURIComponent(`Receipt Batch - ${receipts.length} Receipts - ${new Date().toLocaleDateString()}`);
+            const body = encodeURIComponent(emailBody);
+            
+            window.location.href = `mailto:?subject=${subject}&body=${body}`;
+        }
+
+        function extractReceiptInfo(text) {
+            const info = {
+                businessName: null,
+                date: null,
+                total: null,
+                gst: null
+            };
+
+            const lines = text.split('\n').map(line => line.trim()).filter(line => line);
+
+            // Extract business name (usually first few non-empty lines)
+            if (lines.length > 0) {
+                for (let i = 0; i < Math.min(5, lines.length); i++) {
+                    if (lines[i].length > 3 && !lines[i].match(/^\d+$/) && !lines[i].match(/^[\d\s\-\/]+$/)) {
+                        info.businessName = lines[i];
+                        break;
+                    }
+                }
+            }
+
+            // Extract date (various formats)
+            const datePatterns = [
+                /\b(\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4})\b/,
+                /\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{2,4})\b/i,
+                /\b(\d{2,4}[-\/]\d{1,2}[-\/]\d{1,2})\b/
+            ];
+
+            for (const pattern of datePatterns) {
+                const match = text.match(pattern);
+                if (match) {
+                    info.date = match[1];
+                    break;
+                }
+            }
+
+            // Extract total amount
+            const totalPatterns = [
+                /total[:\s]*\$?\s*([\d,]+\.?\d{0,2})/i,
+                /amount[:\s]*\$?\s*([\d,]+\.?\d{0,2})/i,
+                /balance[:\s]*\$?\s*([\d,]+\.?\d{0,2})/i
+            ];
+
+            for (const pattern of totalPatterns) {
+                const match = text.match(pattern);
+                if (match) {
+                    info.total = '$' + match[1];
+                    break;
+                }
+            }
+
+            // Extract GST/Tax
+            const gstPatterns = [
+                /(?:gst|tax)[:\s]*\$?\s*([\d,]+\.?\d{0,2})/i,
+                /(?:sales tax|vat)[:\s]*\$?\s*([\d,]+\.?\d{0,2})/i
+            ];
+
+            for (const pattern of gstPatterns) {
+                const match = text.match(pattern);
+                if (match) {
+                    info.gst = '$' + match[1];
+                    break;
+                }
+            }
+
+            return info;
+        }
+
+        function showError(message) {
+            error.textContent = message;
+            error.style.display = 'block';
+            successMessage.style.display = 'none';
+            setTimeout(() => {
+                error.style.display = 'none';
+            }, 5000);
+        }
+
+        function showSuccess(message) {
+            successMessage.textContent = message;
+            successMessage.style.display = 'block';
+            error.style.display = 'none';
+            setTimeout(() => {
+                successMessage.style.display = 'none';
+            }, 3000);
+        }
+
+        function hideMessages() {
+            error.style.display = 'none';
+            successMessage.style.display = 'none';
+        }
+
+        // Make deleteReceipt globally available
+        window.deleteReceipt = deleteReceipt;
+    </script>
+</body>
+</html>
